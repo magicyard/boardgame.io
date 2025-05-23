@@ -138,7 +138,7 @@ export class LocalTransport extends Transport {
   master: LocalMaster;
 
   /**
-   * Creates a new Mutiplayer instance.
+   * Creates a new Multiplayer instance.
    * @param {string} matchID - The game ID to connect to.
    * @param {string} playerID - The player ID associated with this client.
    * @param {string} gameName - The game type (the `name` field in `Game`).
