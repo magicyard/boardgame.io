@@ -199,6 +199,17 @@ export class _ClientImpl<
     this.reducer = CreateGameReducer({
       game: this.game,
       isClient: multiplayer !== undefined,
+      // Pass a wrapper for clientDispatch that will access this.store when called.
+      clientDispatch: (action: ActionShape.Any) => {
+        if (this.store) {
+          this.store.dispatch(action);
+        } else {
+          // This case should ideally not happen if thunks are dispatched after full client initialization.
+          console.error(
+            'Client thunk dispatch called before Redux store was initialized.'
+          );
+        }
+      },
     });
 
     this.initialState = null;

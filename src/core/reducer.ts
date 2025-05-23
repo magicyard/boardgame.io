@@ -233,11 +233,32 @@ export const TransientHandlingMiddleware =
 export function CreateGameReducer({
   game,
   isClient,
+  numPlayers, // Ensure numPlayers is in the signature
+  clientDispatch,
+  masterDispatch,
 }: {
   game: Game;
   isClient?: boolean;
+  numPlayers?: number; // Ensure numPlayers type
+  clientDispatch?: (action: ActionShape.Any) => void;
+  masterDispatch?: (action: ActionShape.Any) => void;
 }) {
-  game = ProcessGameConfig(game);
+  // Define the server-side thunk dispatcher.
+  const serverThunkDispatcher = (actionToDispatch: ActionShape.Any) => {
+    if (masterDispatch) {
+      logging.info('Server thunk dispatching action via masterDispatch:', actionToDispatch);
+      masterDispatch(actionToDispatch);
+    } else {
+      // This case should ideally not be reached if isClient is false and masterDispatch is expected.
+      // If isClient is true, this dispatcher shouldn't be called by ProcessGameConfig's thunk dispatch logic.
+      logging.error(
+        'Master dispatch not available for server-side thunk dispatch. Action not dispatched:',
+        actionToDispatch
+      );
+    }
+  };
+
+  game = ProcessGameConfig(game, isClient, clientDispatch, serverThunkDispatcher); // Pass all dispatchers
 
   /**
    * GameReducer
