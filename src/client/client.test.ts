@@ -25,7 +25,7 @@ import {
 import * as Actions from '../core/action-types';
 import Debug from './debug/Debug.svelte';
 import { error } from '../core/logger';
-import type { Game, LogEntry, State, SyncInfo } from '../types';
+import type { Game, LogEntry, State, SyncInfo, ActionPayload } from '../types'; // Added ActionPayload
 import type { Operation } from 'rfc6902';
 import type { TransportData } from '../master/master';
 
@@ -33,6 +33,9 @@ jest.mock('../core/logger', () => ({
   info: jest.fn(),
   error: jest.fn(),
 }));
+
+// Define a flush wait time for async operations in tests
+const FLUSH_WAIT_TIME = 50; // ms
 
 describe('basic', () => {
   let client: ReturnType<typeof Client>;
@@ -989,5 +992,123 @@ describe('start / stop', () => {
       client.stop();
     }).not.toThrow();
     expect(error).not.toHaveBeenCalled();
+  });
+});
+
+// Client-Side Thunks with Local Master
+describe('Client-Side Thunks with Local Master', () => {
+  test('client thunk dispatches move to server and updates all clients', async () => {
+    const gameDef: Game = {
+      setup: () => ({ clientValue: 0, serverValue: 0 }),
+      moves: {
+        incrementClient: ({ G }) => ({ ...G, clientValue: G.clientValue + 1 }),
+        incrementServer: ({ G }) => ({ ...G, serverValue: G.serverValue + 1 }),
+        clientThunkDispatch: ({ playerID }) => async (thunkContext) => {
+          await Promise.resolve(); // Simulate async work
+          const actionToDispatch: ActionPayload.MakeMove = {
+            type: 'incrementServer',
+            args: [],
+            playerID,
+          };
+          thunkContext.dispatch(actionToDispatch);
+        },
+      },
+    };
+
+    const spec = {
+      game: gameDef,
+      multiplayer: Local(),
+    };
+
+    const client0 = Client({ ...spec, playerID: '0' });
+    const client1 = Client({ ...spec, playerID: '1' });
+
+    client0.start();
+    client1.start();
+
+    // Wait for clients to connect and sync initial state
+    await new Promise(resolve => setTimeout(resolve, FLUSH_WAIT_TIME));
+
+    // Initial State Assertions
+    expect(client0.getState().G.serverValue).toBe(0);
+    expect(client1.getState().G.serverValue).toBe(0);
+    expect(client0.getState().G.clientValue).toBe(0);
+
+    // Action
+    client0.moves.clientThunkDispatch();
+
+    // Asynchronous Handling: Wait for thunk, dispatch, master processing, and client updates
+    await new Promise(resolve => setTimeout(resolve, FLUSH_WAIT_TIME * 2)); // Increased wait time for safety
+
+    // Final State Assertions
+    // Check serverValue was updated by the master and propagated to both clients
+    expect(client0.getState().G.serverValue).toBe(1);
+    expect(client1.getState().G.serverValue).toBe(1);
+    // clientValue should remain 0 as incrementClient was not dispatched
+    expect(client0.getState().G.clientValue).toBe(0);
+    expect(client1.getState().G.clientValue).toBe(0);
+
+    client0.stop();
+    client1.stop();
+  });
+
+  test('client thunk optimistic update and server confirmation', async () => {
+    const gameDef: Game = {
+      setup: () => ({ clientValue: 0, serverValue: 0 }),
+      moves: {
+        incrementClientOnly: ({ G }) => ({ ...G, clientValue: G.clientValue + 1 }),
+        incrementServer: ({ G }) => ({ ...G, serverValue: G.serverValue + 1 }),
+        clientThunkOptimistic: ({ playerID }) => async (thunkContext) => {
+          // First, dispatch a move that should be optimistically applied
+          thunkContext.dispatch({ type: 'incrementClientOnly', playerID, args: [] });
+          // Simulate some async work
+          await new Promise(resolve => setTimeout(resolve, 20)); // Short delay
+          // Then, dispatch a move for the server
+          thunkContext.dispatch({ type: 'incrementServer', playerID, args: [] });
+        },
+      },
+    };
+
+    const spec = {
+      game: gameDef,
+      multiplayer: Local(),
+    };
+
+    const client0 = Client({ ...spec, playerID: '0' });
+    const client1 = Client({ ...spec, playerID: '1' });
+
+    client0.start();
+    client1.start();
+
+    // Wait for clients to connect and sync initial state
+    await new Promise(resolve => setTimeout(resolve, FLUSH_WAIT_TIME));
+
+    expect(client0.getState().G.clientValue).toBe(0);
+    expect(client0.getState().G.serverValue).toBe(0);
+
+    // Action
+    client0.moves.clientThunkOptimistic();
+
+    // Immediate Optimistic Update Check for client0
+    // Need a minimal tick for the synchronous part of the thunk to execute
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(client0.getState().G.clientValue).toBe(1);
+    expect(client0.getState().G.serverValue).toBe(0); // Server value not updated yet
+
+    // Server Confirmation: Wait for server processing and state propagation
+    await new Promise(resolve => setTimeout(resolve, FLUSH_WAIT_TIME * 2));
+
+    // Final State Assertions
+    expect(client0.getState().G.serverValue).toBe(1); // Server value updated on client0
+    expect(client1.getState().G.serverValue).toBe(1); // Server value updated on client1
+    // clientValue on client0 should still be 1 (or as per server state if server also modified it)
+    // In this specific game, server doesn't modify clientValue via incrementServer.
+    expect(client0.getState().G.clientValue).toBe(1);
+    // clientValue on client1 should be 0 as incrementClientOnly was optimistic on client0
+    expect(client1.getState().G.clientValue).toBe(0);
+
+
+    client0.stop();
+    client1.stop();
   });
 });

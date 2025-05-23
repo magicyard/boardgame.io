@@ -8,8 +8,8 @@
 
 import * as plugins from '../plugins/main';
 import { Flow } from './flow';
-import type { INVALID_MOVE } from './constants';
-import type { ActionPayload, Game, Move, LongFormMove, State } from '../types';
+import { INVALID_MOVE } from './constants'; // Ensure INVALID_MOVE is imported
+import type { ActionPayload, Game, Move, LongFormMove, State, ActionShape } from '../types'; // Added ActionShape
 import * as logging from './logger';
 import { GameMethod } from './game-methods';
 
@@ -41,7 +41,12 @@ function IsProcessed(game: Game | ProcessedGame): game is ProcessedGame {
  * action.args contain any additional arguments as an
  * Array.
  */
-export function ProcessGameConfig(game: Game | ProcessedGame): ProcessedGame {
+export function ProcessGameConfig(
+  game: Game | ProcessedGame,
+  isClient?: boolean,
+  clientDispatch?: (action: ActionShape.Any) => void,
+  serverThunkDispatcher?: (action: ActionShape.Any) => void
+): ProcessedGame {
   // The Game() function has already been called on this
   // config object, so just pass it through.
   if (IsProcessed(game)) {
@@ -81,30 +86,88 @@ export function ProcessGameConfig(game: Game | ProcessedGame): ProcessedGame {
     pluginNames: game.plugins.map((p) => p.name) as string[],
 
     processMove: (state: State, action: ActionPayload.MakeMove) => {
+      // Get the move function from the flow object.
       let moveFn = flow.getMove(state.ctx, action.type, action.playerID);
 
+      // If it's a long-form move, extract the actual move function.
       if (IsLongFormMove(moveFn)) {
         moveFn = moveFn.move;
       }
 
+      // Check if moveFn is a function.
       if (moveFn instanceof Function) {
+        // Wrap the move function with plugin wrappers.
         const fn = plugins.FnWrap(moveFn, GameMethod.MOVE, game.plugins);
+        
         let args = [];
         if (action.args !== undefined) {
           args = Array.isArray(action.args) ? action.args : [action.args];
         }
+
+        // Prepare the context for the move function.
         const context = {
           ...plugins.GetAPIs(state),
           G: state.G,
           ctx: state.ctx,
           playerID: action.playerID,
         };
-        return fn(context, ...args);
+
+        // Call the move function.
+        const moveResult = fn(context, ...args);
+
+        // Check if the result is a thunk (a function).
+        if (typeof moveResult === 'function') {
+          // This is a thunk.
+          const getState = () => {
+            logging.info('GetState called by thunk');
+            // This state is the state object from processMove's scope when the thunk-returning move was called.
+            return state;
+          };
+
+          const dispatch = (actionToDispatch: ActionShape.MakeMove | ActionShape.GameEvent) => {
+            logging.info('Thunk dispatch called with action:', actionToDispatch);
+
+            const isClientContext = !!isClient; // Use the isClient parameter from ProcessGameConfig
+
+            if (isClientContext) {
+              if (clientDispatch) {
+                logging.info('Client thunk dispatching action to local store:', actionToDispatch);
+                clientDispatch(actionToDispatch);
+                // Existing client middleware should pick this up and send to server.
+              } else {
+                logging.error('Client thunk dispatch called, but no clientDispatch function was provided to ProcessGameConfig.');
+              }
+            } else { // Server context
+              if (serverThunkDispatcher) {
+                logging.info('Dispatching action via serverThunkDispatcher:', actionToDispatch);
+                serverThunkDispatcher(actionToDispatch);
+              } else {
+                logging.error('serverThunkDispatcher not provided in server context for thunk dispatch');
+              }
+            }
+          };
+
+          // Execute the thunk with dispatch, getState, and the original context.
+          // The thunk's execution might be asynchronous, but its immediate call is synchronous here.
+          moveResult({ ...context, dispatch, getState });
+
+          // If a thunk is returned, the G modification is deferred.
+          // Return the original G, indicating that the thunk will handle future state changes.
+          return state.G;
+        } else {
+          // This is a standard move returning G or INVALID_MOVE.
+          // Return the result (new G or INVALID_MOVE).
+          return moveResult;
+        }
       }
 
+      // If moveFn was not a function, log an error and return INVALID_MOVE.
+      // (The original code returned state.G here, but INVALID_MOVE or throwing an error is more appropriate
+      // if the move definition is incorrect.)
       logging.error(`invalid move object: ${action.type}`);
-
-      return state.G;
+      // It's important that an invalid move type returns INVALID_MOVE
+      // for the reducer to correctly handle it.
+      return INVALID_MOVE; // Ensure this constant is imported or defined.
     },
   };
 }

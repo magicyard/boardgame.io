@@ -196,11 +196,28 @@ export class Master {
       return;
     }
 
+    // Forward declaration of the store's dispatch method.
+    let storeDispatch: (action: ActionShape.Any) => void = () => {
+      // This will be replaced once the store is created.
+      // It should ideally not be called before the store is initialized.
+      logging.error("Dispatch called before store was fully initialized in Master.onUpdate.");
+    };
+
     const reducer = CreateGameReducer({
       game: this.game,
+      // masterDispatch is the function that server-side thunks will call.
+      // It needs to eventually call this.store.dispatch.
+      masterDispatch: (action: ActionShape.Any) => {
+        // 'storeDispatch' will be updated to point to 'store.dispatch'
+        // once 'store' is created.
+        return storeDispatch(action);
+      }
     });
     const middleware = applyMiddleware(TransientHandlingMiddleware);
     const store = createStore(reducer, state, middleware);
+
+    // Now that store is created, update storeDispatch to point to the actual store's dispatch.
+    storeDispatch = store.dispatch.bind(store);
 
     // Only allow UNDO / REDO if there is exactly one player
     // that can make moves right now and the person doing the

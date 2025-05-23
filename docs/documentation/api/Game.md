@@ -41,6 +41,12 @@
     },
   },
 
+  // Moves can also return functions, known as "thunks", to enable more complex
+  // scenarios like asynchronous operations or dispatching multiple actions. This
+  // allows for advanced patterns such as fetching data from an API or
+  // implementing intricate sequences of game events. For a detailed explanation
+  // and examples, see the [Thunks in Moves documentation](../../thunks.md).
+
   // Everything below is OPTIONAL.
 
   // Function that allows you to tailor the game state to a specific player.
